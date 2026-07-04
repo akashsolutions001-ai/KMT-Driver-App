@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Route Master Driver</string>
+    <string name="title_activity_main">Route Master Driver</string>
+    <string name="package_name">com.route.master.driver</string>
+    <string name="custom_url_scheme">com.route.master.driver</string>
+</resources>

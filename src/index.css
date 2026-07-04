@@ -1,0 +1,343 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Driver App Design System - Operational & Professional */
+
+@layer base {
+  :root {
+    /* Core Background */
+    --background: 0 0% 98%;
+    --foreground: 220 13% 18%;
+
+    /* Card surfaces */
+    --card: 0 0% 100%;
+    --card-foreground: 220 13% 18%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 13% 18%;
+
+    /* Primary - KMT Blue #005BAC */
+    --primary: 207 100% 34%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary - KMT Yellow #FFD100 */
+    --secondary: 48 100% 50%;
+    --secondary-foreground: 220 13% 18%;
+
+    /* Muted elements */
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+
+    /* Accent - Current/Active Blue #0284C7 */
+    --accent: 200 98% 39%;
+    --accent-foreground: 0 0% 100%;
+
+    /* Success - Reached Green #16A34A */
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+
+    /* Pending - Grey #9CA3AF */
+    --pending: 218 11% 65%;
+    --pending-foreground: 220 13% 18%;
+
+    /* Destructive/Error - Red #DC2626 */
+    --destructive: 0 84% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Warning */
+    --warning: 25 95% 53%;
+    --warning-foreground: 0 0% 100%;
+
+    /* Borders and inputs */
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.5rem;
+
+    /* Sidebar (not used but keeping for compatibility) */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 220 13% 18%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 96%;
+    --sidebar-accent-foreground: 220 13% 18%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217 91% 60%;
+  }
+
+  .dark {
+    --background: 220 13% 10%;
+    --foreground: 0 0% 98%;
+
+    --card: 220 13% 12%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 220 13% 12%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 13% 18%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 220 13% 18%;
+    --muted-foreground: 220 9% 65%;
+
+    --accent: 200 98% 39%;
+    --accent-foreground: 0 0% 100%;
+
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+
+    --pending: 218 11% 50%;
+    --pending-foreground: 0 0% 98%;
+
+    --destructive: 0 84% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --warning: 25 95% 53%;
+    --warning-foreground: 0 0% 100%;
+
+    --border: 220 13% 20%;
+    --input: 220 13% 20%;
+    --ring: 217 91% 60%;
+
+    --sidebar-background: 220 13% 10%;
+    --sidebar-foreground: 0 0% 98%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 13% 18%;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 220 13% 20%;
+    --sidebar-ring: 217 91% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html {
+    /* Prevent font-size scaling on orientation change (iOS) */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* Smooth scrolling */
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    /* Prevent text selection on mobile for better UX */
+    -webkit-tap-highlight-color: transparent;
+    /* Prevent overscroll bounce on iOS */
+    overscroll-behavior-y: none;
+    /* Ensure full height on mobile browsers */
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  /* Ensure root takes full height */
+  #root {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Mobile-optimized safe areas */
+  @supports (padding: max(0px)) {
+    .safe-area-inset-bottom {
+      padding-bottom: max(1rem, env(safe-area-inset-bottom));
+    }
+    
+    .safe-area-inset-top {
+      padding-top: max(0px, env(safe-area-inset-top));
+    }
+
+    .safe-area-inset-left {
+      padding-left: max(0px, env(safe-area-inset-left));
+    }
+
+    .safe-area-inset-right {
+      padding-right: max(0px, env(safe-area-inset-right));
+    }
+  }
+
+  /* Typography hierarchy - responsive */
+  h1 {
+    @apply text-xl sm:text-2xl font-bold tracking-tight;
+  }
+
+  h2 {
+    @apply text-lg sm:text-xl font-semibold;
+  }
+
+  h3 {
+    @apply text-base sm:text-lg font-medium;
+  }
+
+  /* Prevent zoom on input focus (iOS) */
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+@layer components {
+  /* Container with proper padding */
+  .container {
+    @apply w-full mx-auto;
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+
+  /* Status chips */
+  .status-reached {
+    @apply bg-success text-success-foreground;
+  }
+
+  .status-current {
+    @apply bg-accent text-accent-foreground;
+  }
+
+  .status-pending {
+    @apply bg-pending/20 text-pending;
+  }
+
+  /* Inline messages */
+  .message-error {
+    @apply text-destructive;
+  }
+
+  .message-warning {
+    @apply text-warning;
+  }
+
+  .message-info {
+    @apply text-muted-foreground;
+  }
+
+  /* Subtle pulse animation for current status */
+  @keyframes pulse-subtle {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.85;
+    }
+  }
+
+  .animate-pulse-subtle {
+    animation: pulse-subtle 2s ease-in-out infinite;
+  }
+
+  /* Fixed bottom action bar */
+  .fixed-bottom-bar {
+    @apply fixed bottom-0 left-0 right-0 z-20;
+    @apply bg-background/95 backdrop-blur-sm;
+    @apply border-t border-border;
+    padding: 0.75rem 1rem;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+
+  /* Scrollable content area that doesn't overlap with fixed elements */
+  .scrollable-content {
+    @apply flex-1 overflow-y-auto overflow-x-hidden;
+    /* Account for bottom action bar */
+    padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Card with proper touch feedback */
+  .touch-card {
+    @apply transition-colors duration-150;
+    @apply active:bg-secondary/70;
+  }
+
+  /* Responsive chip/badge */
+  .info-chip {
+    @apply inline-flex items-center gap-1.5;
+    @apply px-2 py-1.5 sm:px-2.5 sm:py-1.5;
+    @apply rounded-lg text-xs sm:text-sm font-semibold;
+    @apply border;
+  }
+
+  /* Action button - large touch target */
+  .action-button {
+    @apply w-full min-h-[3.5rem] sm:min-h-[4rem];
+    @apply text-base sm:text-lg font-bold;
+    @apply flex items-center justify-center gap-2 sm:gap-3;
+    @apply transition-all duration-200;
+    @apply active:scale-[0.98];
+  }
+
+  /* Stop list item - optimized for touch */
+  .stop-list-item {
+    @apply flex items-center justify-between;
+    @apply px-3 py-3 sm:px-4 sm:py-3.5;
+    @apply min-h-[3.5rem];
+    @apply transition-colors duration-150;
+    @apply active:bg-secondary/70;
+  }
+
+  /* Number indicator circle */
+  .stop-number {
+    @apply flex items-center justify-center;
+    @apply w-6 h-6 sm:w-7 sm:h-7;
+    @apply rounded-full;
+    @apply bg-secondary text-muted-foreground;
+    @apply font-medium text-xs;
+    @apply flex-shrink-0;
+  }
+
+  /* GPS tracking card */
+  .gps-card {
+    @apply bg-card border rounded-lg;
+    @apply p-2.5 sm:p-3;
+    @apply space-y-1.5 sm:space-y-2;
+  }
+}
+
+/* Hide scrollbar but allow scrolling */
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Landscape mode adjustments */
+  @media (orientation: landscape) and (max-height: 500px) {
+    .landscape-compact {
+      @apply py-1.5;
+    }
+    
+    .landscape-hidden {
+      @apply hidden;
+    }
+  }
+
+  /* Small screen adjustments (iPhone SE, etc.) */
+  @media (max-width: 320px) {
+    .compact-text {
+      @apply text-xs;
+    }
+    
+    .compact-padding {
+      @apply p-2;
+    }
+  }
+
+  /* Full height accounting for mobile browser UI */
+  .min-h-screen-safe {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+}
