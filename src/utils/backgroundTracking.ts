@@ -15,7 +15,7 @@ export async function requestBatteryOptimizationIgnore(): Promise<void> {
     // This is typically done via a deep link or by guiding the user
     // For now, we'll just log - you can add a custom plugin later if needed
     console.log('Battery optimization settings should be opened manually');
-    console.log('Path: Settings > Apps > Route Master Driver > Battery > Unrestricted');
+    console.log('Path: Settings > Apps > KMT Driver App > Battery > Unrestricted');
   } catch (error) {
     console.error('Error requesting battery optimization ignore:', error);
   }

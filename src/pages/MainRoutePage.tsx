@@ -30,14 +30,19 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
   const [activeTripId, setActiveTripId] = useState<string | null>(null);
   const [showBackgroundLocationPrompt, setShowBackgroundLocationPrompt] = useState(false);
 
-  // Get current stop name for notification display
+  // Prefer status === 'current'; if missing (restore/desync), use first pending while in progress
   const currentStopIndex = useMemo(() => {
-    return stops.findIndex((stop) => stop.status === 'current');
-  }, [stops]);
+    const currentIdx = stops.findIndex((stop) => stop.status === 'current');
+    if (currentIdx >= 0) return currentIdx;
+    if (routeState === 'in_progress') {
+      return stops.findIndex((stop) => stop.status === 'pending');
+    }
+    return -1;
+  }, [stops, routeState]);
   const currentStop = currentStopIndex >= 0 ? stops[currentStopIndex] : undefined;
 
   const nextStop = useMemo(() => {
-    if (currentStopIndex < 0) return stops[0];
+    if (currentStopIndex < 0) return undefined;
     return stops[currentStopIndex + 1];
   }, [stops, currentStopIndex]);
 
@@ -142,6 +147,23 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
 
   const isLastStop = currentStopIndex === stops.length - 1;
 
+  // Heal desynced in-progress trips that have no stop marked as current
+  useEffect(() => {
+    if (routeState !== 'in_progress') return;
+    if (stops.some((s) => s.status === 'current')) return;
+    const firstPendingIdx = stops.findIndex((s) => s.status === 'pending');
+    if (firstPendingIdx < 0) return;
+
+    setStops((prev) => {
+      if (prev.some((s) => s.status === 'current')) return prev;
+      const idx = prev.findIndex((s) => s.status === 'pending');
+      if (idx < 0) return prev;
+      return prev.map((stop, i) =>
+        i === idx ? { ...stop, status: 'current' as const } : stop,
+      );
+    });
+  }, [routeState, stops]);
+
   // Restore active trip state on mount
   useEffect(() => {
     let isMounted = true;
@@ -163,21 +185,32 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
         });
 
         if (activeTrip.currentStop) {
-          const currentStopIndex = restoredStops.findIndex(
+          const restoredCurrentIdx = restoredStops.findIndex(
             (s) => s.id === activeTrip.currentStop!.id
           );
-          if (currentStopIndex >= 0) {
-            restoredStops[currentStopIndex].status = 'current';
-            for (let i = 0; i < currentStopIndex; i++) {
+          if (restoredCurrentIdx >= 0) {
+            restoredStops[restoredCurrentIdx].status = 'current';
+            for (let i = 0; i < restoredCurrentIdx; i++) {
               if (restoredStops[i].status !== 'reached') {
                 restoredStops[i].status = 'reached';
               }
             }
-            for (let i = currentStopIndex + 1; i < restoredStops.length; i++) {
+            for (let i = restoredCurrentIdx + 1; i < restoredStops.length; i++) {
               if (restoredStops[i].status !== 'reached') {
                 restoredStops[i].status = 'pending';
               }
             }
+          }
+        }
+
+        // If trip is in progress but no stop is marked current, promote first pending
+        if (
+          activeTrip.routeState === 'in_progress' &&
+          !restoredStops.some((s) => s.status === 'current')
+        ) {
+          const firstPendingIdx = restoredStops.findIndex((s) => s.status === 'pending');
+          if (firstPendingIdx >= 0) {
+            restoredStops[firstPendingIdx].status = 'current';
           }
         }
 
@@ -188,12 +221,27 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
         setActiveTripId(activeTrip.tripId);
 
         const busNumber = driver.route.busNumber;
+        const restoredCurrent = restoredStops.find((s) => s.status === 'current') ?? null;
         updateRouteState(driver.id, busNumber, activeTrip.routeState).catch(console.error);
         saveStopsProgressToFirebase(
           busNumber,
           restoredStops.map((s) => ({ id: s.id, name: s.name, order: s.order, status: s.status }))
         ).catch(console.error);
         writeBusLocationMeta(busNumber, driver.route.id, driver.route.name, driver.name, activeTrip.routeState).catch(console.error);
+
+        if (restoredCurrent && activeTrip.routeState === 'in_progress') {
+          updateTripRouteState({
+            busNumber,
+            tripId: activeTrip.tripId,
+            routeState: 'in_progress',
+            currentStop: {
+              id: restoredCurrent.id,
+              name: restoredCurrent.name,
+              order: restoredCurrent.order,
+              status: restoredCurrent.status,
+            },
+          }).catch(console.error);
+        }
 
         setMessage({ type: 'info', text: 'Route state restored.' });
         setTimeout(() => setMessage(null), 3000);
@@ -323,17 +371,24 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
   };
 
   const handleMarkReached = () => {
-    const currentIndex = stops.findIndex((stop) => stop.status === 'current');
-    if (currentIndex === -1) return;
+    let currentIndex = stops.findIndex((stop) => stop.status === 'current');
+    // Fallback when no stop is marked current (e.g. after restore desync)
+    if (currentIndex === -1) {
+      currentIndex = stops.findIndex((stop) => stop.status === 'pending');
+    }
+    if (currentIndex === -1) {
+      toast.error('No stop to mark as reached');
+      return;
+    }
 
-    const isLastStop = currentIndex === stops.length - 1;
+    const markingLastStop = currentIndex === stops.length - 1;
     const reachedStop = stops[currentIndex];
 
     const nextStops = stops.map((stop, index) => {
       if (index === currentIndex) {
         return { ...stop, status: 'reached' as const };
       }
-      if (index === currentIndex + 1 && !isLastStop) {
+      if (index === currentIndex + 1 && !markingLastStop) {
         return { ...stop, status: 'current' as const };
       }
       return stop;
@@ -352,7 +407,7 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
       updateTripRouteState({
         busNumber: driver.route.busNumber,
         tripId: activeTripId,
-        routeState: isLastStop ? "completed" : "in_progress",
+        routeState: markingLastStop ? "completed" : "in_progress",
         currentStop: current
           ? { id: current.id, name: current.name, order: current.order, status: current.status }
           : null,
@@ -369,7 +424,7 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
         : null,
     ).catch(console.error);
 
-    if (isLastStop) {
+    if (markingLastStop) {
       setRouteState('completed');
       updateRouteState(driver.id, driver.route.busNumber, 'completed').catch(console.error);
 
@@ -386,7 +441,7 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
       setMessage({ type: 'success', text: '🎉 Trip Completed! Great job!' });
       setTimeout(() => setMessage(null), 10000);
     } else {
-      setMessage({ type: 'info', text: `${stops[currentIndex].name} reached.` });
+      setMessage({ type: 'info', text: `${reachedStop.name} reached.` });
       setTimeout(() => setMessage(null), 3000);
     }
   };
@@ -504,9 +559,6 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
               <p className="text-xs text-muted-foreground">
                 Designed & Developed by{' '}
                 <span className="font-semibold text-foreground">Akash.Solution</span>
-              </p>
-              <p className="text-[10px] text-muted-foreground/70 mt-0.5">
-                (Akash Vijay Awachar)
               </p>
               <p className="text-[10px] text-muted-foreground/60 mt-1">
                 © 2026 All Rights Reserved

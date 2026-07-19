@@ -85,7 +85,7 @@ export function LoginPage({ onLogin, error, isLoading }: LoginPageProps) {
 
         {/* App Version - Optional footer */}
         <p className="text-center text-xs text-muted-foreground/60 mt-4 sm:mt-6">
-          Route Master Driver v1.0
+          KMT Driver App v1.0
         </p>
       </div>
     </div>

@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.route.master.driver',
-  appName: 'Route Master Driver',
+  appName: 'KMT Driver App',
   webDir: 'dist',
   android: {
     allowMixedContent: true,
@@ -15,7 +15,7 @@ const config: CapacitorConfig = {
       permissions: {
         location: {
           usageDescription: 'This app needs access to your location to track the bus route in real-time for students.',
-          permission: 'Allow Route Master Driver to access your location?',
+          permission: 'Allow KMT Driver App to access your location?',
         },
       },
     },

@@ -19,9 +19,9 @@ export default defineConfig(({ mode }) => ({
       injectRegister: "auto",
       includeAssets: ["placeholder.svg", "robots.txt"],
       manifest: {
-        name: "Route Master App",
-        short_name: "Route Master",
-        description: "College bus tracking – driver app",
+        name: "KMT Driver App",
+        short_name: "KMT Driver",
+        description: "KMT bus tracking – driver app",
         theme_color: "#0f172a",
         background_color: "#0f172a",
         display: "standalone",
