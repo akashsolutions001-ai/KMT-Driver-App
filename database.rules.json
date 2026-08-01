@@ -1,0 +1,25 @@
+{
+  "rules": {
+    "buses": {
+      "$busNumber": {
+        ".read": true,
+        ".write": true,
+        "location": {
+          ".validate": "newData.hasChildren(['latitude', 'longitude', 'routeState'])"
+        }
+      }
+    },
+    "students": {
+      "$studentId": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "passengers": {
+      "$passengerId": {
+        ".read": true,
+        ".write": true
+      }
+    }
+  }
+}
