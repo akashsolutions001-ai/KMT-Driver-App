@@ -1,4 +1,4 @@
-package com.route.master.driver;
+package com.kmt.driver;
 
 import android.Manifest;
 import android.app.Activity;
@@ -161,7 +161,21 @@ public class PermissionsPlugin extends Plugin {
             result.put("notifications", "granted");
         }
 
+        result.put("isLocationEnabled", isLocationServiceEnabled());
+
         call.resolve(result);
+    }
+
+    private boolean isLocationServiceEnabled() {
+        android.location.LocationManager lm = (android.location.LocationManager) getContext()
+                .getSystemService(android.content.Context.LOCATION_SERVICE);
+        if (lm == null) return false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return lm.isLocationEnabled();
+        } else {
+            return lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ||
+                   lm.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER);
+        }
     }
 
     private boolean hasForegroundLocationPermission() {
@@ -204,8 +218,7 @@ public class PermissionsPlugin extends Plugin {
             Activity activity = getActivity();
             if (activity != null) {
                 try {
-                    Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-                    intent.setData(Uri.parse("package:" + getContext().getPackageName()));
+                    Intent intent = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
                     activity.startActivityForResult(intent, BATTERY_OPTIMIZATION_REQUEST_CODE);
                 } catch (Exception e) {
                     Log.e(TAG, "Error opening battery optimization settings: " + e.getMessage());
@@ -214,6 +227,10 @@ public class PermissionsPlugin extends Plugin {
                 }
             }
         }
+    }
+
+    public void onRawRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        handleRequestPermissionsResult(requestCode, permissions, grantResults);
     }
 
     @Override
@@ -237,6 +254,14 @@ public class PermissionsPlugin extends Plugin {
 
             case BACKGROUND_LOCATION_REQUEST_CODE:
                 Log.d(TAG, "Background location " + (granted ? "granted" : "denied"));
+                if (isStandaloneRequest && pendingCall != null) {
+                    JSObject result = new JSObject();
+                    result.put("status", granted ? "granted" : "denied");
+                    pendingCall.resolve(result);
+                    pendingCall = null;
+                    isStandaloneRequest = false;
+                    return;
+                }
                 currentPermissionStep = 2;
                 break;
 
@@ -293,6 +318,7 @@ public class PermissionsPlugin extends Plugin {
                     Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
                     Uri uri = Uri.fromParts("package", getContext().getPackageName(), null);
                     intent.setData(uri);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     // Add extra to try to scroll to permissions section
                     intent.putExtra(":android:show_fragment",
                             "com.android.settings.applications.appinfo.AppPermissionPreference");
@@ -309,6 +335,7 @@ public class PermissionsPlugin extends Plugin {
             Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
             Uri uri = Uri.fromParts("package", getContext().getPackageName(), null);
             intent.setData(uri);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             activity.startActivity(intent);
             Log.d(TAG, "Opened app settings (standard method)");
             call.resolve();
@@ -348,6 +375,7 @@ public class PermissionsPlugin extends Plugin {
         // On Android 10+, request background location
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             pendingCall = call;
+            isStandaloneRequest = true;
             Log.d(TAG, "Requesting background location permission directly");
             ActivityCompat.requestPermissions(
                     activity,
@@ -388,9 +416,35 @@ public class PermissionsPlugin extends Plugin {
         result.put("level", level);
         result.put("hasForeground", hasForeground);
         result.put("hasBackground", hasBackground);
+        result.put("isLocationEnabled", isLocationServiceEnabled());
 
         Log.d(TAG, "Location permission level: " + level);
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void isLocationEnabled(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("enabled", isLocationServiceEnabled());
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void openDeviceLocationSettings(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null) {
+            call.reject("Activity not available");
+            return;
+        }
+        try {
+            Intent intent = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            activity.startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            Log.e(TAG, "Error opening device location settings: " + e.getMessage());
+            call.reject("Could not open device location settings: " + e.getMessage());
+        }
     }
 
     /**
@@ -423,6 +477,11 @@ public class PermissionsPlugin extends Plugin {
         }
 
         // Request notification permission on Android 13+
+        // Safety: resolve any lingering pending call before starting a new one
+        if (pendingCall != null) {
+            Log.w(TAG, "requestNotificationPermission: clearing stale pendingCall");
+            pendingCall = null;
+        }
         pendingCall = call;
         isStandaloneRequest = true; // Mark as standalone request
         Log.d(TAG, "Requesting notification permission (standalone)");

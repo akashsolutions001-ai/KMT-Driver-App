@@ -18,6 +18,10 @@ const statusConfig: Record<StopStatus, { label: string; className: string }> = {
     label: 'Pending',
     className: 'bg-pending/20 text-pending',
   },
+  skipped: {
+    label: 'Skipped',
+    className: 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/30',
+  },
 };
 
 export function StatusBadge({ status }: StatusBadgeProps) {

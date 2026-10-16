@@ -9,12 +9,17 @@ import {
   clearDriverSession,
   getSavedDriverSession
 } from '@/services/authService';
+import { useMandatoryLocation } from '@/hooks/useMandatoryLocation';
+import { MandatoryLocationScreen } from '@/components/MandatoryLocationScreen';
+import { stopForegroundService } from '@/utils/foregroundService';
 
 const Index = () => {
   const [driver, setDriver] = useState<DriverInfo | null>(null);
   const [loginError, setLoginError] = useState<string | undefined>();
   const [isLoading, setIsLoading] = useState(false);
   const [isRestoring, setIsRestoring] = useState(true); // true until auth state is checked
+
+  const location = useMandatoryLocation();
 
   const handleLogin = async (driverId: string, password: string) => {
     setIsLoading(true);
@@ -27,20 +32,8 @@ const Index = () => {
       if (result) {
         setDriver(result);
         saveDriverSession(result); // Save to localStorage for persistence
-
-        // Request permissions after login (non-blocking, native dialogs)
-        // Like delivery apps - ask but don't block if denied
-        if (typeof window !== 'undefined' && (window as any).Capacitor?.isNativePlatform()) {
-          setTimeout(async () => {
-            try {
-              const { requestPermissionsDirect } = await import('@/utils/requestPermissionsDirect');
-              await requestPermissionsDirect();
-            } catch (permError) {
-              // Silently fail - permissions will be requested when starting route
-              console.log('Permission request after login skipped:', permError);
-            }
-          }, 1000); // Small delay so login completes first
-        }
+        // Re-verify location status immediately after successful login
+        await location.checkNow();
       } else {
         setLoginError('Invalid Driver ID or Password. Please try again.');
       }
@@ -76,6 +69,11 @@ const Index = () => {
 
   const handleLogout = async () => {
     try {
+      await stopForegroundService();
+    } catch (e) {
+      console.warn('Error stopping foreground service on logout:', e);
+    }
+    try {
       await signOutDriver();
     } catch (error) {
       console.error('Error signing out:', error);
@@ -89,19 +87,6 @@ const Index = () => {
     const savedDriver = getSavedDriverSession();
     if (savedDriver) {
       setDriver(savedDriver);
-
-      // Also request permissions when restoring session (not just on fresh login)
-      if (typeof window !== 'undefined' && (window as any).Capacitor?.isNativePlatform()) {
-        setTimeout(async () => {
-          try {
-            const { requestPermissionsDirect } = await import('@/utils/requestPermissionsDirect');
-            console.log('[Index] Requesting permissions after session restore...');
-            await requestPermissionsDirect();
-          } catch (permError) {
-            console.log('Permission request after session restore skipped:', permError);
-          }
-        }, 1500); // Delay so app fully loads first
-      }
     }
     setIsRestoring(false);
   }, []);
@@ -115,6 +100,22 @@ const Index = () => {
           <p className="text-muted-foreground">Loading...</p>
         </div>
       </div>
+    );
+  }
+
+  // Mandatory location gate: Block dashboard and app operation if required location is not granted
+  if (location.isBlocked) {
+    return (
+      <MandatoryLocationScreen
+        status={location.status}
+        isChecking={location.isChecking}
+        isRequesting={location.isRequesting}
+        denialCount={location.denialCount}
+        onRequestPermission={location.requestPermission}
+        onOpenSettings={location.openSettings}
+        onOpenGpsSettings={location.openGpsSettings}
+        onCheckAgain={location.checkNow}
+      />
     );
   }
 

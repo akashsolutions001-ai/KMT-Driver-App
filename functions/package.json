@@ -1,6 +1,6 @@
 {
-  "name": "college-bus-tracking-functions",
-  "description": "Cloud Functions for college bus tracking - FCM notifications",
+  "name": "kmt-driver-functions",
+  "description": "Legacy Cloud Functions - please deploy from Passenger App/Passenger app/functions for KMT transit notifications",
   "main": "index.js",
   "engines": {
     "node": "18"

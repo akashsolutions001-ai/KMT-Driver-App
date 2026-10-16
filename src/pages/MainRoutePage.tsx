@@ -3,19 +3,20 @@ import { RouteHeader } from '@/components/RouteHeader';
 import { StopsList } from '@/components/StopsList';
 import { RouteActionButton } from '@/components/RouteActionButton';
 import { InlineMessage } from '@/components/InlineMessage';
-import { BackgroundLocationPrompt } from '@/components/BackgroundLocationPrompt';
 import { DriverInfo, Stop, RouteState } from '@/types/driver';
-import { MapPin, Wifi, WifiOff } from 'lucide-react';
+import { MapPin, Wifi, WifiOff, Play, CheckCircle, Flag, SkipForward, LogOut } from 'lucide-react';
+import { ActionConfirmDialog } from '@/components/ActionConfirmDialog';
 
 import { useLocationTracking } from '@/hooks/useLocationTracking';
 import { toast } from 'sonner';
 import {
   markStopReachedInRTDB,
+  markStopSkippedInRTDB,
   saveStopsProgressToFirebase,
   updateRouteState,
   writeBusLocationMeta,
 } from '@/services/firebaseService';
-import { finishTrip, getActiveTrip, markStopReached, startTrip, updateTripRouteState } from '@/services/tripService';
+import { finishTrip, getActiveTrip, markStopReached, markStopSkipped, startTrip, updateTripRouteState } from '@/services/tripService';
 import { EmergencyActions } from '@/components/EmergencyActions';
 
 interface MainRoutePageProps {
@@ -28,7 +29,16 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
   const [routeState, setRouteState] = useState<RouteState>('not_started');
   const [message, setMessage] = useState<{ type: 'error' | 'warning' | 'info' | 'success'; text: string } | null>(null);
   const [activeTripId, setActiveTripId] = useState<string | null>(null);
-  const [showBackgroundLocationPrompt, setShowBackgroundLocationPrompt] = useState(false);
+
+  type ConfirmActionState =
+    | { type: 'start_trip' }
+    | { type: 'mark_reached'; stop: Stop; isLast: boolean; skippedCount: number }
+    | { type: 'skip_stop'; stop: Stop; targetStopId?: string }
+    | { type: 'logout' }
+    | null;
+
+  const [confirmAction, setConfirmAction] = useState<ConfirmActionState>(null);
+  const [isActionExecuting, setIsActionExecuting] = useState(false);
 
   // Prefer status === 'current'; if missing (restore/desync), use first pending while in progress
   const currentStopIndex = useMemo(() => {
@@ -47,14 +57,13 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
   }, [stops, currentStopIndex]);
 
   const remainingStops = useMemo(() => {
-    if (currentStopIndex < 0) return stops.length;
-    return Math.max(0, stops.length - currentStopIndex - 1);
-  }, [stops, currentStopIndex]);
+    return stops.filter((s) => s.status === 'pending' || s.status === 'current').length;
+  }, [stops]);
 
   const etaMinutes = remainingStops * 5;
 
   // --- Auto-stop reached handler (called by useLocationTracking) ---
-  const handleAutoStopReached = useCallback((stopId: string) => {
+  const handleAutoStopReached = useCallback((stopId: string, skippedStopIds: string[] = []) => {
     setStops((prevStops) => {
       const currentIndex = prevStops.findIndex((s) => s.id === stopId);
       if (currentIndex === -1) return prevStops;
@@ -65,13 +74,22 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
       const isLast = currentIndex === prevStops.length - 1;
       const reachedStop = prevStops[currentIndex];
 
+      // Identify any stops prior to currentIndex that haven't been reached or skipped
+      const skippedIdsSet = new Set(skippedStopIds);
+      for (let i = 0; i < currentIndex; i++) {
+        if (prevStops[i].status !== 'reached' && prevStops[i].status !== 'skipped') {
+          skippedIdsSet.add(prevStops[i].id);
+        }
+      }
+
       const nextStops = prevStops.map((stop, index) => {
         if (index === currentIndex) return { ...stop, status: 'reached' as const };
+        if (skippedIdsSet.has(stop.id)) return { ...stop, status: 'skipped' as const };
         if (index === currentIndex + 1 && !isLast) return { ...stop, status: 'current' as const };
         return stop;
       });
 
-      // --- Fire-and-forget Firebase writes (same as handleMarkReached) ---
+      const actualSkippedIds = Array.from(skippedIdsSet);
       const busNumber = driver.route.busNumber;
 
       // Firestore trip update
@@ -80,6 +98,7 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
           busNumber,
           tripId: activeTripId,
           stop: { id: reachedStop.id, name: reachedStop.name, order: reachedStop.order },
+          skippedStopIds: actualSkippedIds,
         }).catch(console.error);
 
         const nextCurrent = nextStops.find((s) => s.status === 'current') ?? null;
@@ -102,6 +121,7 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
         nextCurrent
           ? { id: nextCurrent.id, name: nextCurrent.name, order: nextCurrent.order, status: nextCurrent.status }
           : null,
+        actualSkippedIds
       ).catch(console.error);
 
       // Handle last stop (route completion)
@@ -122,11 +142,27 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
         setMessage({ type: 'success', text: '🎉 Trip Completed! Great job!' });
         setTimeout(() => setMessage(null), 10000);
       } else {
-        toast.info(`Auto-detected: ${reachedStop.name} reached`, {
-          duration: 3000,
-          position: 'top-center',
-        });
-        setMessage({ type: 'info', text: `📍 Auto: ${reachedStop.name} reached.` });
+        const skippedNames = prevStops
+          .filter((s) => skippedIdsSet.has(s.id))
+          .map((s) => s.name);
+
+        if (skippedNames.length > 0) {
+          toast.warning(`Skipped: ${skippedNames.join(', ')}`, {
+            description: `Auto-detected arrival at ${reachedStop.name}`,
+            duration: 4000,
+            position: 'top-center',
+          });
+          setMessage({
+            type: 'warning',
+            text: `⏭️ Skipped ${skippedNames.join(', ')} | 📍 Arrived at ${reachedStop.name}`,
+          });
+        } else {
+          toast.info(`Auto-detected: ${reachedStop.name} reached`, {
+            duration: 3000,
+            position: 'top-center',
+          });
+          setMessage({ type: 'info', text: `📍 Auto: ${reachedStop.name} reached.` });
+        }
         setTimeout(() => setMessage(null), 3000);
       }
 
@@ -191,12 +227,12 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
           if (restoredCurrentIdx >= 0) {
             restoredStops[restoredCurrentIdx].status = 'current';
             for (let i = 0; i < restoredCurrentIdx; i++) {
-              if (restoredStops[i].status !== 'reached') {
+              if (restoredStops[i].status !== 'reached' && restoredStops[i].status !== 'skipped') {
                 restoredStops[i].status = 'reached';
               }
             }
             for (let i = restoredCurrentIdx + 1; i < restoredStops.length; i++) {
-              if (restoredStops[i].status !== 'reached') {
+              if (restoredStops[i].status !== 'reached' && restoredStops[i].status !== 'skipped') {
                 restoredStops[i].status = 'pending';
               }
             }
@@ -284,93 +320,91 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
     return () => clearTimeout(resetTimer);
   }, [routeState, driver.route.stops]);
 
-  const handleStartRoute = async () => {
+  const executeStartRoute = async () => {
     if (routeState === "in_progress") return;
 
-    // Request permissions and check if background location prompt is needed
-    const { requestPermissionsDirect } = await import('@/utils/requestPermissionsDirect');
-    const permResult = await requestPermissionsDirect();
-
-    // Show popup if user only granted "while using" permission
-    if (permResult.needsBackgroundPrompt) {
-      setShowBackgroundLocationPrompt(true);
-      // Continue with route start anyway - just show the prompt
-    }
-
-    const nextStops = stops.map((stop, index) =>
-      index === 0 ? { ...stop, status: 'current' as const } : { ...stop, status: 'pending' as const },
-    );
-    const busNumber = driver.route.busNumber;
-    const routeId = driver.route.id;
-    const routeName = driver.route.name;
-
-    setStops(nextStops);
-    setRouteState('in_progress');
-    setMessage({ type: 'info', text: 'Route started. GPS tracking active.' });
-
-    // 1) Write location meta FIRST and wait - Cloud Function reads routeId from here when routeState triggers
+    setIsActionExecuting(true);
     try {
-      await writeBusLocationMeta(busNumber, routeId, routeName, driver.name, 'in_progress');
-    } catch (e) {
-      console.error('Failed to write bus location meta:', e);
-    }
+      // Verify mandatory location permissions before allowing trip to start
+      const { checkMandatoryLocationStatus } = await import('@/utils/permissions');
+      const permStatus = await checkMandatoryLocationStatus();
 
-    // 2) Then write routeState - this triggers notifyStudentsRouteStarted; routeId must already exist
-    try {
-      await updateRouteState(driver.id, busNumber, 'in_progress');
-    } catch (e) {
-      console.error('Failed to update route state:', e);
-    }
-
-    // 3) Stops progress (can be parallel)
-    console.log('🚏 Saving stops progress for bus:', busNumber, 'with', nextStops.length, 'stops');
-    saveStopsProgressToFirebase(
-      busNumber,
-      nextStops.map((s) => ({ id: s.id, name: s.name, order: s.order, status: s.status })),
-    )
-      .then(() => console.log('✅ Stops saved successfully'))
-      .catch((err) => {
-        console.error('❌ Failed to save stops:', err);
-      });
-
-    startTrip({
-      busNumber: driver.route.busNumber,
-      routeId: driver.route.id,
-      routeName: driver.route.name,
-      driverId: driver.id,
-      driverName: driver.name,
-      stops: nextStops,
-    })
-      .then((tripId) => {
-        setActiveTripId(tripId);
-        const current = nextStops.find((s) => s.status === "current") ?? null;
-        return updateTripRouteState({
-          busNumber: driver.route.busNumber,
-          tripId,
-          routeState: "in_progress",
-          currentStop: current
-            ? { id: current.id, name: current.name, order: current.order, status: current.status }
-            : null,
+      if (permStatus.isBlocked) {
+        toast.error('Location Access Required', {
+          description: permStatus.message || 'Continuous location permission is required to start a trip.',
         });
+        setMessage({
+          type: 'error',
+          text: permStatus.message || 'Cannot start trip: location permission is missing or GPS is disabled.',
+        });
+        return;
+      }
+
+      const nextStops = stops.map((stop, index) =>
+        index === 0 ? { ...stop, status: 'current' as const } : { ...stop, status: 'pending' as const },
+      );
+      const busNumber = driver.route.busNumber;
+      const routeId = driver.route.id;
+      const routeName = driver.route.name;
+
+      setStops(nextStops);
+      setRouteState('in_progress');
+      setMessage({ type: 'info', text: 'Route started. GPS tracking active.' });
+
+      // 1) Write location meta FIRST and wait - Cloud Function reads routeId from here when routeState triggers
+      try {
+        await writeBusLocationMeta(busNumber, routeId, routeName, driver.name, 'in_progress');
+      } catch (e) {
+        console.error('Failed to write bus location meta:', e);
+      }
+
+      // 2) Then write routeState - this triggers notifyStudentsRouteStarted; routeId must already exist
+      try {
+        await updateRouteState(driver.id, busNumber, 'in_progress');
+      } catch (e) {
+        console.error('Failed to update route state:', e);
+      }
+
+      // 3) Stops progress (can be parallel)
+      console.log('🚏 Saving stops progress for bus:', busNumber, 'with', nextStops.length, 'stops');
+      saveStopsProgressToFirebase(
+        busNumber,
+        nextStops.map((s) => ({ id: s.id, name: s.name, order: s.order, status: s.status })),
+      )
+        .then(() => console.log('✅ Stops saved successfully'))
+        .catch((err) => {
+          console.error('❌ Failed to save stops:', err);
+        });
+
+      await startTrip({
+        busNumber: driver.route.busNumber,
+        routeId: driver.route.id,
+        routeName: driver.route.name,
+        driverId: driver.id,
+        driverName: driver.name,
+        stops: nextStops,
       })
-      .catch(console.error);
+        .then((tripId) => {
+          setActiveTripId(tripId);
+          const current = nextStops.find((s) => s.status === "current") ?? null;
+          return updateTripRouteState({
+            busNumber: driver.route.busNumber,
+            tripId,
+            routeState: "in_progress",
+            currentStop: current
+              ? { id: current.id, name: current.name, order: current.order, status: current.status }
+              : null,
+          });
+        })
+        .catch(console.error);
 
-    setTimeout(() => setMessage(null), 3000);
+      setTimeout(() => setMessage(null), 3000);
+    } finally {
+      setIsActionExecuting(false);
+    }
   };
 
-  const handleBackgroundPromptDismiss = () => {
-    setShowBackgroundLocationPrompt(false);
-  };
-
-  const handleBackgroundPermissionGranted = () => {
-    setShowBackgroundLocationPrompt(false);
-    toast.success('Background location enabled!', {
-      description: 'GPS tracking will now work when the app is minimized.',
-      duration: 4000,
-    });
-  };
-
-  const handleMarkReached = () => {
+  const executeMarkReached = async () => {
     let currentIndex = stops.findIndex((stop) => stop.status === 'current');
     // Fallback when no stop is marked current (e.g. after restore desync)
     if (currentIndex === -1) {
@@ -381,80 +415,336 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
       return;
     }
 
-    const markingLastStop = currentIndex === stops.length - 1;
-    const reachedStop = stops[currentIndex];
+    setIsActionExecuting(true);
+    try {
+      const markingLastStop = currentIndex === stops.length - 1;
+      const reachedStop = stops[currentIndex];
 
-    const nextStops = stops.map((stop, index) => {
-      if (index === currentIndex) {
-        return { ...stop, status: 'reached' as const };
-      }
-      if (index === currentIndex + 1 && !markingLastStop) {
-        return { ...stop, status: 'current' as const };
-      }
-      return stop;
-    });
-
-    setStops(nextStops);
-
-    if (activeTripId) {
-      markStopReached({
-        busNumber: driver.route.busNumber,
-        tripId: activeTripId,
-        stop: { id: reachedStop.id, name: reachedStop.name, order: reachedStop.order },
-      }).catch(console.error);
-
-      const current = nextStops.find((s) => s.status === "current") ?? null;
-      updateTripRouteState({
-        busNumber: driver.route.busNumber,
-        tripId: activeTripId,
-        routeState: markingLastStop ? "completed" : "in_progress",
-        currentStop: current
-          ? { id: current.id, name: current.name, order: current.order, status: current.status }
-          : null,
-      }).catch(console.error);
-    }
-
-    const nextCurrent = nextStops.find((s) => s.status === "current") ?? null;
-    markStopReachedInRTDB(
-      driver.route.busNumber,
-      reachedStop.id,
-      Date.now(),
-      nextCurrent
-        ? { id: nextCurrent.id, name: nextCurrent.name, order: nextCurrent.order, status: nextCurrent.status }
-        : null,
-    ).catch(console.error);
-
-    if (markingLastStop) {
-      setRouteState('completed');
-      updateRouteState(driver.id, driver.route.busNumber, 'completed').catch(console.error);
-
-      if (activeTripId) {
-        finishTrip({ busNumber: driver.route.busNumber, tripId: activeTripId }).catch(console.error);
+      // Any previous unreached stops before currentIndex should be marked as skipped
+      const skippedStopIds: string[] = [];
+      for (let i = 0; i < currentIndex; i++) {
+        if (stops[i].status !== 'reached' && stops[i].status !== 'skipped') {
+          skippedStopIds.push(stops[i].id);
+        }
       }
 
-      toast.success('Trip Completed!', {
-        description: 'All passengers safely dropped off. Great job! 🎉',
-        duration: 5000,
-        position: 'top-center',
+      const nextStops = stops.map((stop, index) => {
+        if (index === currentIndex) {
+          return { ...stop, status: 'reached' as const };
+        }
+        if (skippedStopIds.includes(stop.id)) {
+          return { ...stop, status: 'skipped' as const };
+        }
+        if (index === currentIndex + 1 && !markingLastStop) {
+          return { ...stop, status: 'current' as const };
+        }
+        return stop;
       });
 
-      setMessage({ type: 'success', text: '🎉 Trip Completed! Great job!' });
-      setTimeout(() => setMessage(null), 10000);
-    } else {
-      setMessage({ type: 'info', text: `${reachedStop.name} reached.` });
-      setTimeout(() => setMessage(null), 3000);
+      setStops(nextStops);
+
+      if (activeTripId) {
+        markStopReached({
+          busNumber: driver.route.busNumber,
+          tripId: activeTripId,
+          stop: { id: reachedStop.id, name: reachedStop.name, order: reachedStop.order },
+          skippedStopIds,
+        }).catch(console.error);
+
+        const current = nextStops.find((s) => s.status === "current") ?? null;
+        updateTripRouteState({
+          busNumber: driver.route.busNumber,
+          tripId: activeTripId,
+          routeState: markingLastStop ? "completed" : "in_progress",
+          currentStop: current
+            ? { id: current.id, name: current.name, order: current.order, status: current.status }
+            : null,
+        }).catch(console.error);
+      }
+
+      const nextCurrent = nextStops.find((s) => s.status === "current") ?? null;
+      markStopReachedInRTDB(
+        driver.route.busNumber,
+        reachedStop.id,
+        Date.now(),
+        nextCurrent
+          ? { id: nextCurrent.id, name: nextCurrent.name, order: nextCurrent.order, status: nextCurrent.status }
+          : null,
+        skippedStopIds
+      ).catch(console.error);
+
+      if (markingLastStop) {
+        setRouteState('completed');
+        updateRouteState(driver.id, driver.route.busNumber, 'completed').catch(console.error);
+
+        if (activeTripId) {
+          finishTrip({ busNumber: driver.route.busNumber, tripId: activeTripId }).catch(console.error);
+        }
+
+        toast.success('Trip Completed!', {
+          description: 'All passengers safely dropped off. Great job! 🎉',
+          duration: 5000,
+          position: 'top-center',
+        });
+
+        setMessage({ type: 'success', text: '🎉 Trip Completed! Great job!' });
+        setTimeout(() => setMessage(null), 10000);
+      } else {
+        if (skippedStopIds.length > 0) {
+          const skippedNames = stops.filter((s) => skippedStopIds.includes(s.id)).map((s) => s.name);
+          toast.warning(`Skipped: ${skippedNames.join(', ')}`, {
+            description: `Reached ${reachedStop.name}`,
+            duration: 3000,
+            position: 'top-center',
+          });
+          setMessage({ type: 'warning', text: `⏭️ Skipped ${skippedNames.join(', ')} | 📍 ${reachedStop.name} reached.` });
+        } else {
+          setMessage({ type: 'info', text: `${reachedStop.name} reached.` });
+        }
+        setTimeout(() => setMessage(null), 3000);
+      }
+    } finally {
+      setIsActionExecuting(false);
     }
   };
 
+  const executeSkipStop = async (targetStopId?: string) => {
+    let targetIndex = -1;
+    if (targetStopId) {
+      targetIndex = stops.findIndex((s) => s.id === targetStopId);
+    } else {
+      targetIndex = stops.findIndex((s) => s.status === 'current');
+      if (targetIndex === -1) {
+        targetIndex = stops.findIndex((s) => s.status === 'pending');
+      }
+    }
+
+    if (targetIndex === -1) {
+      toast.error('No stop to skip');
+      return;
+    }
+
+    setIsActionExecuting(true);
+    try {
+      const isLast = targetIndex === stops.length - 1;
+      const skippedStop = stops[targetIndex];
+
+      const nextStops = stops.map((stop, index) => {
+        if (index === targetIndex) {
+          return { ...stop, status: 'skipped' as const };
+        }
+        if (index === targetIndex + 1 && !isLast && stop.status === 'pending') {
+          return { ...stop, status: 'current' as const };
+        }
+        return stop;
+      });
+
+      if (!isLast && !nextStops.some((s) => s.status === 'current')) {
+        const firstPending = nextStops.findIndex((s) => s.status === 'pending');
+        if (firstPending >= 0) {
+          nextStops[firstPending].status = 'current';
+        }
+      }
+
+      setStops(nextStops);
+
+      const busNumber = driver.route.busNumber;
+      const nextCurrent = nextStops.find((s) => s.status === 'current') ?? null;
+
+      if (activeTripId) {
+        markStopSkipped({
+          busNumber,
+          tripId: activeTripId,
+          stopId: skippedStop.id,
+        }).catch(console.error);
+
+        updateTripRouteState({
+          busNumber,
+          tripId: activeTripId,
+          routeState: isLast ? 'completed' : 'in_progress',
+          currentStop: nextCurrent
+            ? { id: nextCurrent.id, name: nextCurrent.name, order: nextCurrent.order, status: nextCurrent.status }
+            : null,
+        }).catch(console.error);
+      }
+
+      markStopSkippedInRTDB(
+        busNumber,
+        skippedStop.id,
+        nextCurrent
+          ? { id: nextCurrent.id, name: nextCurrent.name, order: nextCurrent.order, status: nextCurrent.status }
+          : null
+      ).catch(console.error);
+
+      if (isLast) {
+        setRouteState('completed');
+        updateRouteState(driver.id, busNumber, 'completed').catch(console.error);
+        if (activeTripId) {
+          finishTrip({ busNumber, tripId: activeTripId }).catch(console.error);
+        }
+        toast.success('Trip Completed!', {
+          description: 'All stops completed or skipped. Great job! 🎉',
+          duration: 5000,
+          position: 'top-center',
+        });
+        setMessage({ type: 'success', text: '🎉 Trip Completed! Great job!' });
+        setTimeout(() => setMessage(null), 10000);
+      } else {
+        toast.warning(`Stop Skipped: ${skippedStop.name}`, {
+          description: nextCurrent ? `Next stop: ${nextCurrent.name}` : undefined,
+          duration: 3000,
+          position: 'top-center',
+        });
+        setMessage({ type: 'warning', text: `⏭️ ${skippedStop.name} skipped.` });
+        setTimeout(() => setMessage(null), 3000);
+      }
+    } finally {
+      setIsActionExecuting(false);
+    }
+  };
+
+  // Confirmation prompts
+  const promptStartRoute = () => {
+    if (routeState === 'in_progress') return;
+    setConfirmAction({ type: 'start_trip' });
+  };
+
+  const promptMarkReached = () => {
+    let currentIndex = stops.findIndex((stop) => stop.status === 'current');
+    if (currentIndex === -1) {
+      currentIndex = stops.findIndex((stop) => stop.status === 'pending');
+    }
+    if (currentIndex === -1) {
+      toast.error('No stop to mark as reached');
+      return;
+    }
+
+    const reachedStop = stops[currentIndex];
+    const isLast = currentIndex === stops.length - 1;
+
+    let skippedCount = 0;
+    for (let i = 0; i < currentIndex; i++) {
+      if (stops[i].status !== 'reached' && stops[i].status !== 'skipped') {
+        skippedCount++;
+      }
+    }
+
+    setConfirmAction({
+      type: 'mark_reached',
+      stop: reachedStop,
+      isLast,
+      skippedCount,
+    });
+  };
+
+  const promptSkipStop = (targetStopId?: string) => {
+    let targetIndex = -1;
+    if (targetStopId) {
+      targetIndex = stops.findIndex((s) => s.id === targetStopId);
+    } else {
+      targetIndex = stops.findIndex((s) => s.status === 'current');
+      if (targetIndex === -1) {
+        targetIndex = stops.findIndex((s) => s.status === 'pending');
+      }
+    }
+
+    if (targetIndex === -1) {
+      toast.error('No stop to skip');
+      return;
+    }
+
+    const targetStop = stops[targetIndex];
+    setConfirmAction({
+      type: 'skip_stop',
+      stop: targetStop,
+      targetStopId,
+    });
+  };
+
+  const promptLogout = () => {
+    if (!onLogout) return;
+    setConfirmAction({ type: 'logout' });
+  };
+
+  const getActionConfirmConfig = () => {
+    if (!confirmAction) return null;
+
+    switch (confirmAction.type) {
+      case 'start_trip':
+        return {
+          title: 'Start Trip?',
+          description:
+            'Are you ready to start this route? Continuous GPS tracking and passenger live ETA updates will begin.',
+          highlightText: `🚌 Route: ${driver.route.name} • Bus: ${driver.route.busNumber}`,
+          confirmText: 'Yes, Start Trip',
+          variant: 'primary' as const,
+          icon: <Play className="w-6 h-6 text-primary fill-primary/20" />,
+          onConfirm: executeStartRoute,
+        };
+
+      case 'mark_reached':
+        if (confirmAction.isLast) {
+          return {
+            title: 'Complete Entire Trip?',
+            description: `Are you sure you want to finish the trip at "${confirmAction.stop.name}"? This will complete the route and end tracking.`,
+            highlightText: `🏁 Final Stop: ${confirmAction.stop.name}`,
+            confirmText: 'Yes, Complete Trip',
+            variant: 'success' as const,
+            icon: <Flag className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />,
+            onConfirm: executeMarkReached,
+          };
+        }
+        return {
+          title: 'Mark Stop Reached?',
+          description: `Confirm arrival at "${confirmAction.stop.name}"? Passengers will be alerted of arrival.`,
+          highlightText: `📍 Stop: ${confirmAction.stop.name}`,
+          highlightNote:
+            confirmAction.skippedCount > 0
+              ? `⚠️ Note: ${confirmAction.skippedCount} prior unreached stop(s) will automatically be marked as skipped.`
+              : undefined,
+          confirmText: 'Yes, Mark Reached',
+          variant: 'success' as const,
+          icon: <CheckCircle className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />,
+          onConfirm: executeMarkReached,
+        };
+
+      case 'skip_stop':
+        return {
+          title: 'Skip Stop?',
+          description: `Are you sure you want to skip "${confirmAction.stop.name}"? The bus will proceed directly to the next scheduled stop.`,
+          highlightText: `⏭️ Skipping: ${confirmAction.stop.name}`,
+          confirmText: 'Yes, Skip Stop',
+          variant: 'warning' as const,
+          icon: <SkipForward className="w-6 h-6 text-amber-600 dark:text-amber-400" />,
+          onConfirm: () => executeSkipStop(confirmAction.targetStopId),
+        };
+
+      case 'logout':
+        return {
+          title: 'Sign Out?',
+          description:
+            routeState === 'in_progress'
+              ? 'A trip is currently in progress! Signing out will disconnect live tracking on this device.'
+              : 'Are you sure you want to sign out of the Driver App?',
+          highlightText: `👤 Driver: ${driver.name} • Bus: ${driver.route.busNumber}`,
+          highlightNote:
+            routeState === 'in_progress'
+              ? '⚠️ Warning: Trip is active. Tracking will stop if you sign out.'
+              : undefined,
+          confirmText: 'Yes, Sign Out',
+          variant: 'destructive' as const,
+          icon: <LogOut className="w-6 h-6 text-red-600 dark:text-red-400" />,
+          onConfirm: () => {
+            onLogout?.();
+          },
+        };
+    }
+  };
+
+  const actionConfirmConfig = getActionConfirmConfig();
+
   return (
     <>
-      {/* Background Location Permission Prompt Modal */}
-      {showBackgroundLocationPrompt && (
-        <BackgroundLocationPrompt
-          onDismiss={handleBackgroundPromptDismiss}
-          onPermissionGranted={handleBackgroundPermissionGranted}
-        />
-      )}
 
       <div className="min-h-screen-safe bg-background flex flex-col">
         {/* Header - Sticky */}
@@ -462,7 +752,7 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
           driverName={driver.name}
           busNumber={driver.route.busNumber}
           routeName={driver.route.name}
-          onLogout={onLogout}
+          onLogout={onLogout ? promptLogout : undefined}
         />
 
         {/* Main Scrollable Content */}
@@ -552,7 +842,7 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
             />
 
             {/* Stops List */}
-            <StopsList stops={stops} />
+            <StopsList stops={stops} onSkipStop={promptSkipStop} />
 
             {/* Footer */}
             <footer className="pt-6 pb-2 text-center border-t border-border/50">
@@ -573,11 +863,30 @@ export function MainRoutePage({ driver, onLogout }: MainRoutePageProps) {
             routeState={routeState}
             currentStopName={currentStop?.name}
             isLastStop={isLastStop}
-            onStartRoute={handleStartRoute}
-            onMarkReached={handleMarkReached}
+            onStartRoute={promptStartRoute}
+            onMarkReached={promptMarkReached}
+            onSkipStop={promptSkipStop}
           />
         </div>
       </div>
+
+      {/* Confirmation Dialog */}
+      {actionConfirmConfig && (
+        <ActionConfirmDialog
+          open={confirmAction !== null}
+          onOpenChange={(open) => !open && setConfirmAction(null)}
+          title={actionConfirmConfig.title}
+          description={actionConfirmConfig.description}
+          highlightText={actionConfirmConfig.highlightText}
+          highlightNote={actionConfirmConfig.highlightNote}
+          confirmText={actionConfirmConfig.confirmText}
+          cancelText="Cancel"
+          variant={actionConfirmConfig.variant}
+          icon={actionConfirmConfig.icon}
+          isLoading={isActionExecuting}
+          onConfirm={actionConfirmConfig.onConfirm}
+        />
+      )}
     </>
   );
 }

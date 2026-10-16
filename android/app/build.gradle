@@ -1,10 +1,18 @@
 apply plugin: 'com.android.application'
 
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+def hasKeystoreFile = keystorePropertiesFile.exists()
+if (hasKeystoreFile) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+def hasEnvKeystore = System.getenv("KEYSTORE_PATH") != null
+
 android {
-    namespace = "com.route.master.driver"
+    namespace = "com.kmt.driver"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.route.master.driver"
+        applicationId "com.kmt.driver"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
@@ -16,10 +24,34 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (hasKeystoreFile) {
+                def storeFilePath = keystoreProperties['storeFile']
+                def resolvedStoreFile = rootProject.file(storeFilePath)
+                if (!resolvedStoreFile.exists() && rootProject.file("../" + storeFilePath).exists()) {
+                    resolvedStoreFile = rootProject.file("../" + storeFilePath)
+                }
+                storeFile resolvedStoreFile
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            } else if (hasEnvKeystore) {
+                storeFile file(System.getenv("KEYSTORE_PATH"))
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS")
+                keyPassword System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasKeystoreFile || hasEnvKeystore) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 }

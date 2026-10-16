@@ -1,15 +1,9 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.route.master.driver',
+  appId: 'com.kmt.driver',
   appName: 'KMT Driver App',
   webDir: 'dist',
-  android: {
-    allowMixedContent: true,
-    buildOptions: {
-      keystorePath: undefined, // Add your keystore path for release builds
-    },
-  },
   plugins: {
     Geolocation: {
       permissions: {

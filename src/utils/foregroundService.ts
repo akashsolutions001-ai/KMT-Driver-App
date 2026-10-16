@@ -10,6 +10,11 @@ export interface LocationServicePlugin {
     routeName?: string;
     routeState?: string;
     currentStopName?: string;
+    authToken?: string;
+    refreshToken?: string;
+    databaseUrl?: string;
+    apiKey?: string;
+    projectId?: string;
   }): Promise<{ success: boolean; message?: string }>;
   stopForegroundService(): Promise<{ success: boolean }>;
   updateRouteInfo(options: {
@@ -20,7 +25,16 @@ export interface LocationServicePlugin {
     routeName?: string;
     routeState?: string;
     currentStopName?: string;
+    authToken?: string;
+    refreshToken?: string;
+    databaseUrl?: string;
+    apiKey?: string;
+    projectId?: string;
   }): Promise<{ success: boolean; message?: string }>;
+  updateAuthToken(options: {
+    authToken: string;
+    refreshToken?: string;
+  }): Promise<{ success: boolean }>;
 }
 
 const LocationService = registerPlugin<LocationServicePlugin>('LocationService', {
@@ -35,22 +49,30 @@ export interface StartForegroundServiceOptions {
   routeName: string;
   routeState: 'not_started' | 'in_progress' | 'completed';
   currentStopName?: string;
+  authToken?: string;
+  refreshToken?: string;
+  databaseUrl?: string;
+  apiKey?: string;
+  projectId?: string;
 }
 
 /**
  * Start Android foreground service for continuous GPS tracking.
- * This keeps the app alive and tracking GPS even when minimized or screen is off.
- * GPS tracking happens natively - does NOT depend on WebView/JavaScript.
- * Shows a persistent "Trip Ongoing" notification like Swiggy/Zomato.
+ * Keeps GPS tracking active in background and sends updates to Firebase RTDB
+ * even when the app is minimized, screen is off, or app is closed.
  */
 export async function startForegroundService(options: StartForegroundServiceOptions): Promise<void> {
   if (!Capacitor.isNativePlatform()) {
-    console.log('Foreground service not needed on web/PWA');
+    console.log('[ForegroundService] Not needed on web/PWA');
     return;
   }
 
   try {
-    console.log('Starting foreground service with options:', options);
+    console.log('[ForegroundService] Starting foreground service with options:', {
+      busNumber: options.busNumber,
+      routeId: options.routeId,
+      hasAuthToken: !!options.authToken,
+    });
     const result = await LocationService.startForegroundService({
       driverId: options.driverId,
       driverName: options.driverName,
@@ -59,17 +81,22 @@ export async function startForegroundService(options: StartForegroundServiceOpti
       routeName: options.routeName,
       routeState: options.routeState,
       currentStopName: options.currentStopName,
+      authToken: options.authToken,
+      refreshToken: options.refreshToken,
+      databaseUrl: options.databaseUrl,
+      apiKey: options.apiKey,
+      projectId: options.projectId,
     });
-    console.log('Foreground service started:', result);
+    console.log('[ForegroundService] Foreground service started:', result);
   } catch (error) {
-    console.error('Error starting foreground service:', error);
+    console.error('[ForegroundService] Error starting foreground service:', error);
     throw error;
   }
 }
 
 /**
- * Stop Android foreground service
- * This will also remove the "Trip Ongoing" notification
+ * Stop Android foreground service and clear notification.
+ * Called when the trip completes or driver explicitly logs out.
  */
 export async function stopForegroundService(): Promise<void> {
   if (!Capacitor.isNativePlatform()) {
@@ -78,15 +105,14 @@ export async function stopForegroundService(): Promise<void> {
 
   try {
     await LocationService.stopForegroundService();
-    console.log('Foreground service stopped');
+    console.log('[ForegroundService] Foreground service stopped');
   } catch (error) {
-    console.error('Error stopping foreground service:', error);
+    console.error('[ForegroundService] Error stopping foreground service:', error);
   }
 }
 
 /**
- * Update route info in the running foreground service
- * This updates the notification with the current stop name
+ * Update route info and stop name in running foreground service.
  */
 export async function updateForegroundServiceRouteInfo(options: StartForegroundServiceOptions): Promise<void> {
   if (!Capacitor.isNativePlatform()) {
@@ -102,10 +128,30 @@ export async function updateForegroundServiceRouteInfo(options: StartForegroundS
       routeName: options.routeName,
       routeState: options.routeState,
       currentStopName: options.currentStopName,
+      authToken: options.authToken,
+      refreshToken: options.refreshToken,
+      databaseUrl: options.databaseUrl,
+      apiKey: options.apiKey,
+      projectId: options.projectId,
     });
-    console.log('Foreground service route info updated');
+    console.log('[ForegroundService] Route info updated');
   } catch (error) {
-    console.error('Error updating foreground service route info:', error);
+    console.error('[ForegroundService] Error updating route info:', error);
   }
 }
 
+/**
+ * Update Firebase Auth token in running foreground service.
+ */
+export async function updateForegroundServiceAuthToken(authToken: string, refreshToken?: string): Promise<void> {
+  if (!Capacitor.isNativePlatform()) {
+    return;
+  }
+
+  try {
+    await LocationService.updateAuthToken({ authToken, refreshToken });
+    console.log('[ForegroundService] Auth token forwarded to foreground service');
+  } catch (error) {
+    console.warn('[ForegroundService] Failed to forward auth token to foreground service:', error);
+  }
+}

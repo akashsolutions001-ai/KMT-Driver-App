@@ -1,4 +1,4 @@
-export type StopStatus = 'reached' | 'current' | 'pending';
+export type StopStatus = 'reached' | 'current' | 'pending' | 'skipped';
 
 export interface Stop {
   id: string;

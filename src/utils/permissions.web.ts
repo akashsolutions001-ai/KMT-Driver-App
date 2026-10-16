@@ -46,6 +46,15 @@ export class PermissionsWeb extends WebPlugin implements PermissionsPlugin {
     console.warn('[PermissionsWeb] openAppLocationSettings is not available on web');
   }
 
+  async openDeviceLocationSettings(): Promise<void> {
+    // Not applicable on web - log warning
+    console.warn('[PermissionsWeb] openDeviceLocationSettings is not available on web');
+  }
+
+  async isLocationEnabled(): Promise<{ enabled: boolean }> {
+    return { enabled: true };
+  }
+
   async getLocationPermissionLevel(): Promise<LocationPermissionLevel> {
     // On web, assume "always" if geolocation is granted
     try {
@@ -54,12 +63,14 @@ export class PermissionsWeb extends WebPlugin implements PermissionsPlugin {
         level: permission.state === 'granted' ? 'always' : 'denied',
         hasForeground: permission.state === 'granted',
         hasBackground: true, // Not applicable on web
+        isLocationEnabled: true,
       };
     } catch {
       return {
         level: 'denied',
         hasForeground: false,
         hasBackground: false,
+        isLocationEnabled: true,
       };
     }
   }

@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">KMT Driver App</string>
     <string name="title_activity_main">KMT Driver App</string>
-    <string name="package_name">com.route.master.driver</string>
-    <string name="custom_url_scheme">com.route.master.driver</string>
+    <string name="package_name">com.kmt.driver</string>
+    <string name="custom_url_scheme">com.kmt.driver</string>
 </resources>

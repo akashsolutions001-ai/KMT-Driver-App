@@ -114,6 +114,7 @@ export async function updateTripRouteState(params: {
 
 /**
  * Marks a stop as reached and stores the "arrived time".
+ * Optionally marks any skipped stops as "skipped".
  * - reachedAtClient: time when driver tapped (device clock)
  * - reachedAtServer: server timestamp (authoritative ordering)
  */
@@ -121,12 +122,40 @@ export async function markStopReached(params: {
   busNumber: string;
   tripId: string;
   stop: { id: string; name: string; order: number };
+  skippedStopIds?: string[];
 }): Promise<void> {
   const tripRef = busTripDoc(params.busNumber, params.tripId);
-  await updateDoc(tripRef, {
+  const updates: Record<string, any> = {
     [`stops.${params.stop.id}.status`]: "reached",
     [`stops.${params.stop.id}.reachedAtClient`]: Date.now(),
     [`stops.${params.stop.id}.reachedAtServer`]: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (params.skippedStopIds && params.skippedStopIds.length > 0) {
+    for (const sId of params.skippedStopIds) {
+      updates[`stops.${sId}.status`] = "skipped";
+      updates[`stops.${sId}.skippedAtClient`] = Date.now();
+      updates[`stops.${sId}.skippedAtServer`] = serverTimestamp();
+    }
+  }
+
+  await updateDoc(tripRef, updates);
+}
+
+/**
+ * Marks a single stop as skipped in the active trip.
+ */
+export async function markStopSkipped(params: {
+  busNumber: string;
+  tripId: string;
+  stopId: string;
+}): Promise<void> {
+  const tripRef = busTripDoc(params.busNumber, params.tripId);
+  await updateDoc(tripRef, {
+    [`stops.${params.stopId}.status`]: "skipped",
+    [`stops.${params.stopId}.skippedAtClient`]: Date.now(),
+    [`stops.${params.stopId}.skippedAtServer`]: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
 }
@@ -169,7 +198,7 @@ export async function getActiveTrip(busNumber: string): Promise<{
     }
 
     // Get the most recent active trip (by startedAtClient or updatedAt)
-    const trips = querySnapshot.docs.map((doc) => ({
+    const trips: Array<Record<string, any> & { id: string }> = querySnapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
     }));

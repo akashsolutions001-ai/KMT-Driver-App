@@ -1,21 +1,36 @@
 # Add project specific ProGuard rules here.
 # You can control the set of applied configuration files using the
 # proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Keep Capacitor classes and JavaScript interfaces
+-keep class com.getcapacitor.** { *; }
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+-keep class * extends com.getcapacitor.Plugin { *; }
+-keepclassmembers class * extends com.getcapacitor.Plugin {
+    @com.getcapacitor.PluginMethod public *;
+}
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Preserve Capacitor BridgeActivity and Bridge
+-keep class com.getcapacitor.BridgeActivity { *; }
+-keep class com.getcapacitor.Bridge { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Keep Driver App custom classes, services, receivers, and plugins
+-keep class com.kmt.driver.** { *; }
+
+# Google Play Services Location
+-keep class com.google.android.gms.location.** { *; }
+-keep class com.google.android.gms.common.** { *; }
+-dontwarn com.google.android.gms.**
+
+# Firebase Database & Firestore
+-keep class com.google.firebase.** { *; }
+-dontwarn com.google.firebase.**
+
+# Capacitor Plugins
+-keep class com.capacitorjs.plugins.** { *; }
+
+# Keep line numbers and file names for crash reporting
+-keepattributes SourceFile,LineNumberTable
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod

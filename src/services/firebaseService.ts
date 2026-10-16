@@ -1,5 +1,6 @@
 import { ref, set, update, serverTimestamp } from "firebase/database";
-import { database } from "@/lib/firebase";
+import { doc, setDoc, serverTimestamp as firestoreTimestamp } from "firebase/firestore";
+import { database, firestore } from "@/lib/firebase";
 import { LocationData } from "./locationService";
 import type { StopStatus } from "@/types/driver";
 
@@ -154,6 +155,19 @@ export const saveLocationToFirebase = async (
       updatedAt: serverTimestamp()
     });
 
+    // Also sync to Firestore liveBuses collection so both RTDB and Firestore remain synchronized
+    if (routeId) {
+      try {
+        const firestoreDocId = `${routeId}_${busNumber}`;
+        await setDoc(doc(firestore, "liveBuses", firestoreDocId), {
+          ...cleanedLocationData,
+          updatedAt: firestoreTimestamp(),
+        }, { merge: true });
+      } catch (fsErr) {
+        // Non-blocking warning
+      }
+    }
+
     console.log(`[saveLocation] ✅ Location saved to RTDB for bus: ${busNumber}`);
   } catch (error: any) {
     console.error(`[saveLocation] ❌ RTDB write FAILED for path "${path}":`, error?.message || error);
@@ -220,8 +234,7 @@ export const saveStopsProgressToFirebase = async (
 };
 
 /**
- * Write a single stop as "reached" and update currentStop (one write, no full-list spam).
- * Use this when the driver taps "Mark Reached" so the backend triggers once and sends one notification.
+ * Write a single stop as "reached", any skipped stops as "skipped", and update currentStop in RTDB.
  */
 export const markStopReachedInRTDB = async (
   busNumber: string,
@@ -232,12 +245,54 @@ export const markStopReachedInRTDB = async (
     name: string;
     order: number;
     status: string;
-  } | null
+  } | null,
+  skippedStopIds: string[] = []
 ): Promise<void> => {
   const busRoot = `buses/${busNumber}`;
   const updates: Record<string, unknown> = {
     [`${busRoot}/stops/${reachedStopId}/status`]: "reached",
     [`${busRoot}/stops/${reachedStopId}/reachedAt`]: reachedAt,
+    [`${busRoot}/currentStop`]: nextCurrentStop
+      ? removeUndefined({
+        stopId: nextCurrentStop.id,
+        name: nextCurrentStop.name,
+        order: nextCurrentStop.order,
+        status: nextCurrentStop.status,
+        updatedAt: serverTimestamp(),
+      })
+      : removeUndefined({
+        stopId: null,
+        name: null,
+        order: null,
+        status: null,
+        updatedAt: serverTimestamp(),
+      }),
+  };
+  if (nextCurrentStop) {
+    updates[`${busRoot}/stops/${nextCurrentStop.id}/status`] = "current";
+  }
+  for (const skipId of skippedStopIds) {
+    updates[`${busRoot}/stops/${skipId}/status`] = "skipped";
+  }
+  await update(ref(database), updates);
+};
+
+/**
+ * Mark a stop as "skipped" in RTDB and advance currentStop.
+ */
+export const markStopSkippedInRTDB = async (
+  busNumber: string,
+  skippedStopId: string,
+  nextCurrentStop: {
+    id: string;
+    name: string;
+    order: number;
+    status: string;
+  } | null
+): Promise<void> => {
+  const busRoot = `buses/${busNumber}`;
+  const updates: Record<string, unknown> = {
+    [`${busRoot}/stops/${skippedStopId}/status`]: "skipped",
     [`${busRoot}/currentStop`]: nextCurrentStop
       ? removeUndefined({
         stopId: nextCurrentStop.id,

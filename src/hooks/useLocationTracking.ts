@@ -4,10 +4,17 @@ import { saveLocationToFirebase } from '@/services/firebaseService';
 import { DriverInfo } from '@/types/driver';
 import { RouteState, Stop } from '@/types/driver';
 import { WakeLockManager, AppStateMonitor } from '@/utils/backgroundTracking';
-import { startForegroundService, stopForegroundService, StartForegroundServiceOptions } from '@/utils/foregroundService';
-import { checkPermissions } from '@/utils/permissions';
+import {
+  startForegroundService,
+  stopForegroundService,
+  updateForegroundServiceRouteInfo,
+  updateForegroundServiceAuthToken,
+  StartForegroundServiceOptions
+} from '@/utils/foregroundService';
+import { checkMandatoryLocationStatus } from '@/utils/permissions';
 import { Capacitor } from '@capacitor/core';
 import { haversineDistance } from '@/utils/haversine';
+import { auth } from '@/lib/firebase';
 
 /** Radius in meters — auto-mark a stop when the bus is within this distance */
 const AUTO_MARK_RADIUS_METERS = 100;
@@ -20,8 +27,8 @@ interface UseLocationTrackingOptions {
   currentStopName?: string;
   /** Live stops array — needed for auto-stop detection */
   stops?: Stop[];
-  /** Callback fired when auto-stop detection triggers; receives the stopId */
-  onAutoStopReached?: (stopId: string) => void;
+  /** Callback fired when auto-stop detection triggers; receives reached stopId and any skipped stopIds */
+  onAutoStopReached?: (stopId: string, skippedStopIds?: string[]) => void;
 }
 
 export const useLocationTracking = ({
@@ -71,9 +78,40 @@ export const useLocationTracking = ({
     onAutoStopReachedRef.current = onAutoStopReached;
   }, [driver, routeState, updateInterval, currentStopName, stops, onAutoStopReached]);
 
+  // Sync route / stop changes to native foreground service
+  useEffect(() => {
+    if (isTracking && isNativeRef.current) {
+      updateForegroundServiceRouteInfo({
+        driverId: driver.id,
+        driverName: driver.name,
+        busNumber: driver.route.busNumber,
+        routeId: driver.route.id,
+        routeName: driver.route.name,
+        routeState: routeState,
+        currentStopName: currentStopName,
+      });
+    }
+  }, [currentStopName, isTracking, routeState, driver]);
+
+  // Keep native foreground service auth token in sync with Firebase Web Auth
+  useEffect(() => {
+    const unsubscribe = auth.onIdTokenChanged(async (user) => {
+      if (user && isTrackingRef.current && isNativeRef.current) {
+        try {
+          const token = await user.getIdToken();
+          await updateForegroundServiceAuthToken(token, user.refreshToken);
+        } catch (err) {
+          console.warn('[LocationTracking] Failed to sync updated auth token:', err);
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
   /**
-   * Check if the bus is within AUTO_MARK_RADIUS_METERS of the next pending stop.
-   * If so, call onAutoStopReached and record the stopId to prevent duplicates.
+   * Check if the bus is within AUTO_MARK_RADIUS_METERS of any upcoming stop.
+   * If the driver did not go to a prior stop and reaches a subsequent stop,
+   * all bypassed unreached stops are identified as skipped!
    */
   const checkAutoStopMarking = useCallback((location: LocationData) => {
     const currentStops = stopsRef.current;
@@ -83,33 +121,52 @@ export const useLocationTracking = ({
     // Only auto-mark when route is in_progress and we have stops + callback
     if (currentRouteState !== 'in_progress' || !currentStops || !callback) return;
 
-    // Find the next stop that is "current" or first "pending" (i.e. not yet reached)
-    const nextStop = currentStops.find(
-      (s) => s.status === 'current' || s.status === 'pending'
+    // Find all unreached stops (not reached, not already skipped)
+    const unreachedStops = currentStops.filter(
+      (s) => s.status !== 'reached' && s.status !== 'skipped'
     );
-    if (!nextStop) return;
+    if (unreachedStops.length === 0) return;
 
-    // Need coordinates to calculate distance
-    if (nextStop.latitude == null || nextStop.longitude == null) return;
+    for (const targetStop of unreachedStops) {
+      if (targetStop.latitude == null || targetStop.longitude == null) continue;
+      if (autoMarkedStopsRef.current.has(targetStop.id)) continue;
 
-    // Already auto-marked this stop?
-    if (autoMarkedStopsRef.current.has(nextStop.id)) return;
+      const distance = haversineDistance(
+        location.latitude,
+        location.longitude,
+        targetStop.latitude,
+        targetStop.longitude
+      );
 
-    const distance = haversineDistance(
-      location.latitude,
-      location.longitude,
-      nextStop.latitude,
-      nextStop.longitude
-    );
+      console.log(
+        `[AutoStop] Distance to "${targetStop.name}" (${targetStop.id}): ${distance.toFixed(1)}m (threshold: ${AUTO_MARK_RADIUS_METERS}m)`
+      );
 
-    console.log(
-      `[AutoStop] Distance to "${nextStop.name}" (${nextStop.id}): ${distance.toFixed(1)}m (threshold: ${AUTO_MARK_RADIUS_METERS}m)`
-    );
+      if (distance <= AUTO_MARK_RADIUS_METERS) {
+        const matchedIndex = currentStops.findIndex((s) => s.id === targetStop.id);
+        
+        // Any unreached stops before this matched stop were skipped by the driver!
+        const skippedStopIds: string[] = [];
+        for (let j = 0; j < matchedIndex; j++) {
+          const priorStop = currentStops[j];
+          if (priorStop.status !== 'reached' && priorStop.status !== 'skipped') {
+            skippedStopIds.push(priorStop.id);
+          }
+        }
 
-    if (distance <= AUTO_MARK_RADIUS_METERS) {
-      console.log(`[AutoStop] ✅ Auto-marking stop "${nextStop.name}" as reached`);
-      autoMarkedStopsRef.current.add(nextStop.id);
-      callback(nextStop.id);
+        console.log(
+          `[AutoStop] ✅ Detected stop "${targetStop.name}" reached. Bypassed stops marked skipped:`,
+          skippedStopIds
+        );
+
+        autoMarkedStopsRef.current.add(targetStop.id);
+        for (const sId of skippedStopIds) {
+          autoMarkedStopsRef.current.add(sId);
+        }
+
+        callback(targetStop.id, skippedStopIds);
+        break; // Only handle one stop arrival per location update
+      }
     }
   }, []);
 
@@ -165,13 +222,13 @@ export const useLocationTracking = ({
     setIsTracking(true);
     setError(null);
 
-    // Verify permissions before starting
+    // Verify mandatory location status before starting
     try {
-      const permStatus = await checkPermissions();
-      console.log('[LocationTracking] Permission status:', permStatus);
+      const permStatus = await checkMandatoryLocationStatus();
+      console.log('[LocationTracking] Mandatory location status:', permStatus);
 
-      if (permStatus.foregroundLocation !== 'granted') {
-        setError('Location permission not granted. Please grant all permissions.');
+      if (permStatus.isBlocked) {
+        setError(permStatus.message || 'Mandatory location permission not granted.');
         isTrackingRef.current = false;
         setIsTracking(false);
         isStartingRef.current = false;
@@ -185,6 +242,16 @@ export const useLocationTracking = ({
     const currentRouteState = routeStateRef.current;
     const stopName = currentStopNameRef.current;
 
+    // Fetch Firebase Auth ID token and refresh token so native service can authenticate directly
+    let authToken: string | undefined;
+    let refreshToken: string | undefined;
+    try {
+      authToken = (await auth.currentUser?.getIdToken()) || undefined;
+      refreshToken = auth.currentUser?.refreshToken || undefined;
+    } catch (tokenErr) {
+      console.warn('[LocationTracking] Could not retrieve auth tokens for native service:', tokenErr);
+    }
+
     const serviceOptions: StartForegroundServiceOptions = {
       driverId: currentDriver.id,
       driverName: currentDriver.name,
@@ -193,11 +260,20 @@ export const useLocationTracking = ({
       routeName: currentDriver.route.name,
       routeState: currentRouteState,
       currentStopName: stopName,
+      authToken,
+      refreshToken,
+      databaseUrl: "https://kmt-tracker-62159-default-rtdb.firebaseio.com",
+      apiKey: "AIzaSyBncLpnXmd5KIvE8Sq4iKi1ug4bl4hxhqk",
+      projectId: "kmt-tracker-62159",
     };
 
     try {
-      // Start foreground service (Android) - this starts NATIVE GPS tracking
-      console.log('[LocationTracking] Starting foreground service with options:', serviceOptions);
+      // Start foreground service (Android) - this starts NATIVE continuous GPS tracking
+      console.log('[LocationTracking] Starting foreground service with options:', {
+        busNumber: serviceOptions.busNumber,
+        routeId: serviceOptions.routeId,
+        hasAuthToken: !!serviceOptions.authToken,
+      });
       await startForegroundService(serviceOptions);
       console.log('[LocationTracking] Foreground service started successfully');
 
@@ -215,12 +291,17 @@ export const useLocationTracking = ({
           },
           (locationError: LocationError) => {
             console.error('[LocationTracking] Location watch error:', locationError);
-            if (!isNativeRef.current) {
-              // On web, surface the error to UI
-              setError(locationError.message);
-              lastErrorRef.current = locationError.message;
+            const errMsg = locationError.message || '';
+            setError(errMsg);
+            lastErrorRef.current = errMsg;
+            if (errMsg.includes('denied') || errMsg.includes('permission') || errMsg.includes('unavailable')) {
+              checkMandatoryLocationStatus().then((check) => {
+                if (check.isBlocked) {
+                  console.warn('[LocationTracking] Mandatory location missing during tracking, stopping gracefully.');
+                  stopTracking();
+                }
+              });
             }
-            // On native, the foreground service continues independently
           }
         );
         watchIdRef.current = watchId;
@@ -234,8 +315,8 @@ export const useLocationTracking = ({
       }
 
       // Push location to RTDB from JavaScript on BOTH web and native
-      // On native this acts as a reliable fallback in case the Java service
-      // fails to write (e.g. Firebase init error, missing busNumber, etc.)
+      // When app is in foreground, this provides instant real-time sync.
+      // When minimized or closed, the native Android service takes over 100%.
       console.log('[LocationTracking] Starting RTDB push interval (every', updateIntervalRef.current, 'ms)');
       intervalIdRef.current = window.setInterval(() => {
         const location = lastLocationRef.current;
@@ -294,12 +375,15 @@ export const useLocationTracking = ({
     } else if (!shouldTrack && isTrackingRef.current) {
       stopTracking();
     }
-  }, [isActive, routeState]); // Removed startTracking/stopTracking from deps to prevent loops
+  }, [isActive, routeState]); // startTracking and stopTracking are stable callbacks
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (isTrackingRef.current) {
+      // On web/PWA, stop tracking when component unmounts.
+      // On native Android, DO NOT stop the foreground service on unmount if route is in progress!
+      // The Android foreground service is designed to keep running when the app is minimized or closed.
+      if (!isNativeRef.current && isTrackingRef.current) {
         stopTracking();
       }
     };

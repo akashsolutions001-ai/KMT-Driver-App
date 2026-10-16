@@ -6,7 +6,7 @@ Two Cloud Functions send FCM notifications to students based on Realtime Databas
 
 - Node.js 18+
 - Firebase CLI: `npm install -g firebase-tools`
-- Firebase project linked: `firebase use college-bus-tracking-903e7` (or your project ID)
+- Firebase project linked: `firebase use kmt-tracker-62159` (or your project ID)
 
 ## RTDB structure (unchanged)
 

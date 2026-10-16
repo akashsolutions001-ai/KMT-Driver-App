@@ -109,47 +109,13 @@ export const getDriverById = async (driverId: string): Promise<DriverInfo | null
 /**
  * Authenticate driver with ID and password
  * @deprecated Use authService.authenticateDriver instead
- * This function is kept for backward compatibility but should use Firebase Auth
  */
 export const authenticateDriver = async (
   driverId: string,
   password: string
 ): Promise<DriverInfo | null> => {
-  try {
-    const driverDocRef = doc(firestore, COLLECTIONS.DRIVERS, driverId);
-    const driverDoc = await getDoc(driverDocRef);
-
-    if (!driverDoc.exists()) {
-      return null;
-    }
-
-    const driverData = driverDoc.data();
-
-    // Verify password matches the one stored in Firestore (set by admin)
-    if (driverData.password !== password) {
-      return null;
-    }
-
-    const routeId = driverData.routeId;
-    if (!routeId) {
-      throw new Error("Driver has no associated route");
-    }
-
-    // Fetch route data
-    const route = await getRouteById(routeId);
-    if (!route) {
-      throw new Error("Route not found for driver");
-    }
-
-    return {
-      id: driverDoc.id,
-      name: driverData.name || "",
-      route: route
-    };
-  } catch (error) {
-    console.error("Error authenticating driver:", error);
-    throw error;
-  }
+  const { authenticateDriver: authServiceAuthenticate } = await import("./authService");
+  return authServiceAuthenticate(driverId, password);
 };
 
 /**

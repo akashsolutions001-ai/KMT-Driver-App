@@ -6,7 +6,7 @@ import {
   User
 } from "firebase/auth";
 import { auth } from "@/lib/firebase";
-import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc, updateDoc, deleteField, Timestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { DriverInfo } from "@/types/driver";
 import { getRouteById } from "./firestoreService";
@@ -18,70 +18,111 @@ const COLLECTIONS = {
 } as const;
 
 /**
- * Authenticate driver using credentials from Firestore (set by admin)
- * Verifies driverId (field) and password against Firestore, then authenticates with Firebase Auth
+ * Format driver ID to a standardized email for Firebase Authentication
+ */
+const getDriverEmail = (driverId: string, customEmail?: string): string => {
+  if (customEmail && customEmail.includes("@")) {
+    return customEmail.trim();
+  }
+  const cleanId = driverId.toLowerCase().trim().replace(/[^a-z0-9_-]/g, "");
+  return `${cleanId}@kmt.gov.in`;
+};
+
+/**
+ * Authenticate driver using Firebase Authentication.
+ * If the driver account exists only in legacy Firestore with a plaintext password,
+ * this automatically migrates the credentials to Firebase Auth and scrubs
+ * the plaintext password from Firestore.
  * 
  * @param driverId - The driverId field value from Firestore (e.g., "DRV-001")
- * @param password - The password field value from Firestore
+ * @param password - The password entered by the driver
  */
 export const authenticateDriver = async (
   driverId: string,
   password: string
 ): Promise<DriverInfo | null> => {
   try {
-    console.log('[AUTH] Step 1: Querying Firestore for driverId:', driverId);
-    // Step 1: Query driver by driverId field (not document ID)
+    const trimmedId = driverId.trim();
+    console.log('[AUTH] Step 1: Querying driver record for:', trimmedId);
+
+    // Step 1: Query driver by driverId field (or document ID fallback)
     const driversQuery = query(
       collection(firestore, COLLECTIONS.DRIVERS),
-      where("driverId", "==", driverId)
+      where("driverId", "==", trimmedId)
     );
 
-    const querySnapshot = await getDocs(driversQuery);
+    let querySnapshot = await getDocs(driversQuery);
+    let driverDoc = !querySnapshot.empty ? querySnapshot.docs[0] : null;
 
-    console.log('[AUTH] Firestore query completed. Found docs:', querySnapshot.size);
-    if (querySnapshot.empty) {
-      console.log('[AUTH] No driver found with driverId:', driverId);
+    // Fallback: Check if document ID matches
+    if (!driverDoc) {
+      const docRef = doc(firestore, COLLECTIONS.DRIVERS, trimmedId);
+      const directDoc = await getDoc(docRef);
+      if (directDoc.exists()) {
+        driverDoc = directDoc;
+      }
+    }
+
+    if (!driverDoc) {
+      console.warn('[AUTH] No driver profile found with driverId:', trimmedId);
       return null;
     }
 
-    // Get the first matching document
-    const driverDoc = querySnapshot.docs[0];
     const driverData = driverDoc.data();
+    const email = getDriverEmail(trimmedId, driverData.email);
 
-    // Step 2: Verify password matches the one stored in Firestore (set by admin)
-    console.log('[AUTH] Step 2: Verifying password...');
-    if (driverData.password !== password) {
-      console.log('[AUTH] Password mismatch for driver:', driverId);
-      return null;
-    }
-    console.log('[AUTH] Password verified successfully');
-
-    // Step 3: Get email from driver data or use driverId as email
-    // Admin can set email field, otherwise we use driverId@driverapp.com
-    const email = driverData.email || `${driverId}@driverapp.com`;
-
-    // Step 4: Authenticate with Firebase Auth (optional - don't fail if it doesn't work)
-    // If user doesn't exist, create it automatically
+    // Step 2: Primary Authentication via Firebase Auth
+    let authUser: User | null = null;
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-    } catch (authError: any) {
-      if (authError.code === 'auth/user-not-found') {
-        // User doesn't exist in Firebase Auth, try to create it automatically
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      authUser = userCredential.user;
+      console.log('[AUTH] Firebase Auth successful for:', email);
+
+      // If document still contains a legacy plaintext password, scrub it now
+      if (driverData.password) {
         try {
-          await createUserWithEmailAndPassword(auth, email, password);
-          console.log('Firebase Auth user created automatically for driver:', driverId);
-        } catch (createError: any) {
-          // If creation fails, continue with Firestore verification only
-          // Firebase Auth is optional for this app
-          console.log('Firebase Auth user creation skipped, using Firestore authentication only');
+          await updateDoc(driverDoc.ref, {
+            password: deleteField(),
+            authUid: authUser.uid,
+            email: email,
+            updatedAt: Timestamp.now()
+          });
+          console.log('[AUTH] Successfully removed legacy plaintext password from Firestore');
+        } catch (cleanErr) {
+          console.warn('[AUTH] Note: Could not scrub legacy password:', cleanErr);
         }
-      } else if (authError.code === 'auth/invalid-credential' || authError.code === 'auth/wrong-password') {
-        // Password doesn't match Firebase Auth (but matches Firestore)
-        // This is fine - we'll use Firestore authentication
-        console.log('Firebase Auth credentials mismatch, using Firestore authentication only');
+      }
+    } catch (authError: any) {
+      console.log('[AUTH] Firebase Auth sign-in failed code:', authError.code);
+
+      // Step 3: Safe migration path for legacy drivers
+      // If user not in Firebase Auth, check if Firestore holds a legacy matching password
+      if (
+        (authError.code === 'auth/user-not-found' || authError.code === 'auth/invalid-credential') &&
+        driverData.password &&
+        driverData.password === password
+      ) {
+        console.log('[AUTH] Migrating legacy driver to Firebase Auth:', email);
+        try {
+          const newCredential = await createUserWithEmailAndPassword(auth, email, password);
+          authUser = newCredential.user;
+
+          // Immediately scrub the plaintext password
+          await updateDoc(driverDoc.ref, {
+            password: deleteField(),
+            authUid: authUser.uid,
+            email: email,
+            updatedAt: Timestamp.now()
+          });
+          console.log('[AUTH] Driver successfully migrated to Firebase Auth and plaintext password removed.');
+        } catch (createErr: any) {
+          console.error('[AUTH] Failed to migrate driver account:', createErr);
+          // If creation failed because user exists, then the password was wrong
+          return null;
+        }
       } else {
-        // Other auth errors - log but continue with Firestore verification
-        console.log('Firebase Auth error:', authError.code, 'Continuing with Firestore verification only');
+        // Invalid credentials or other auth failure
+        return null;
       }
     }
 
@@ -244,27 +285,41 @@ export const getSavedDriverSession = (): DriverInfo | null => {
  */
 export const restoreDriverSession = async (user: User): Promise<DriverInfo | null> => {
   try {
-    // Extract driverId from email (e.g., "DRV-001@driverapp.com" → "DRV-001")
-    const email = user.email;
-    if (!email) return null;
+    let driverDoc: any = null;
+    let driverData: any = null;
 
-    const driverId = email.split("@")[0];
-    if (!driverId) return null;
-
-    // Query driver by driverId field
-    const driversQuery = query(
+    // Check by authUid first
+    const uidQuery = query(
       collection(firestore, COLLECTIONS.DRIVERS),
-      where("driverId", "==", driverId)
+      where("authUid", "==", user.uid)
     );
+    const uidSnap = await getDocs(uidQuery);
+    if (!uidSnap.empty) {
+      driverDoc = uidSnap.docs[0];
+      driverData = driverDoc.data();
+    } else {
+      // Fallback: match by email or driverId prefix
+      const email = user.email || "";
+      const driverId = email.includes("@") ? email.split("@")[0] : email;
+      if (!driverId) return null;
 
-    const querySnapshot = await getDocs(driversQuery);
-    if (querySnapshot.empty) {
-      console.warn("Driver not found in Firestore for:", driverId);
+      const driversQuery = query(
+        collection(firestore, COLLECTIONS.DRIVERS),
+        where("driverId", "==", driverId)
+      );
+      const querySnapshot = await getDocs(driversQuery);
+      if (!querySnapshot.empty) {
+        driverDoc = querySnapshot.docs[0];
+        driverData = driverDoc.data();
+      }
+    }
+
+    if (!driverDoc || !driverData) {
+      console.warn("Driver record not found in Firestore for user:", user.uid, user.email);
       return null;
     }
 
-    const driverDoc = querySnapshot.docs[0];
-    const driverData = driverDoc.data();
+    const driverId = driverData.driverId || driverDoc.id;
 
     // Fetch route data (same logic as authenticateDriver)
     // Supports both: driver.assignedBusId OR bus.assignedDriverId (reverse lookup)

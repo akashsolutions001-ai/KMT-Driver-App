@@ -1,24 +1,19 @@
 {
   "rules": {
     "buses": {
+      ".read": true,
       "$busNumber": {
         ".read": true,
-        ".write": true,
+        ".write": "auth != null && (auth.token.admin === true || auth.token.role === 'admin' || auth.token.role === 'driver' || (auth.token.email != null && auth.token.email.matches(/.*@kmt\\.gov\\.in$/)))",
         "location": {
-          ".validate": "newData.hasChildren(['latitude', 'longitude', 'routeState'])"
+          ".validate": "newData.hasChildren(['latitude', 'longitude']) && newData.child('latitude').isNumber() && newData.child('longitude').isNumber() && newData.child('latitude').val() >= -90 && newData.child('latitude').val() <= 90 && newData.child('longitude').val() >= -180 && newData.child('longitude').val() <= 180"
         }
-      }
-    },
-    "students": {
-      "$studentId": {
-        ".read": true,
-        ".write": true
       }
     },
     "passengers": {
       "$passengerId": {
-        ".read": true,
-        ".write": true
+        ".read": "auth != null && (auth.uid == $passengerId || auth.token.admin === true || (auth.token.email != null && auth.token.email.matches(/.*@kmt\\.gov\\.in$/)))",
+        ".write": "auth != null && (auth.uid == $passengerId || auth.token.admin === true || (auth.token.email != null && auth.token.email.matches(/.*@kmt\\.gov\\.in$/)))"
       }
     }
   }

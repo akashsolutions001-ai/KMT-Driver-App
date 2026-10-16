@@ -105,7 +105,7 @@ LocationTrackingService: Live bus data sent to Firestore successfully: m8pLb0vJ4
 
 **Firestore:**
 1. Go to: https://console.firebase.google.com/
-2. Select project: `college-bus-tracking-903e7`
+2. Select project: `kmt-tracker-62159`
 3. Firestore Database > liveBuses collection
 4. Should see document: `{routeId}_{busNumber}`
 
